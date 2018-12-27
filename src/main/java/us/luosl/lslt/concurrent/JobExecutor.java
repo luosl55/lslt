@@ -1,114 +1,185 @@
 package us.luosl.lslt.concurrent;
 
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static us.luosl.lslt.concurrent.JobStatus.END_SUBMIT;
+import static us.luosl.lslt.concurrent.JobStatus.AWAIT_COMPLETE;
+import static us.luosl.lslt.concurrent.JobStatus.CANCEL;
 
+/**
+ * 基于 job 的线程池
+ */
 public class JobExecutor {
 
     private enum EndJobTag{
-        END_JOB, CANCEL
+        END_JOB
     }
 
-    private LinkedBlockingDeque<Runnable> jobExecutorQueue = new LinkedBlockingDeque<>(100);
-
-    // todo
-    private ExecutorService jobExecutor = new ThreadPoolExecutor(6, 6, 1L,
-            TimeUnit.MINUTES,
-            jobExecutorQueue,
-            new BlockingRejectedExecutionHandler());
+    private ExecutorService jobExecutor;
 
     private ExecutorService observerExecutor = Executors.newCachedThreadPool();
 
-    public <C> void endSubmit(JobObserver<C> jobObserver) throws InterruptedException {
-        FutureTask task =  new FutureTask<>(() -> END_SUBMIT);
-        jobExecutorQueue.putFirst(task);
-        jobObserver.setStatus(END_SUBMIT);
+    private AtomicLong number = new AtomicLong();
+
+    private JobExecutor(ExecutorService executorService){
+        this.jobExecutor = executorService;
     }
 
+    /**
+     * 终止向一个 Job 继续提交任务
+     * @param jobObserver jobObserver
+     * @param <C> <C>
+     */
+    public <C> void endSubmit(JobObserver<C> jobObserver) {
+        jobObserver.setStatus(AWAIT_COMPLETE);
+    }
+
+    /**
+     * 终止向一个 Job 继续提交任务,并且阻塞等待所有任务完成
+     * @param jobObserver jobObserver
+     * @param <C> <C>
+     * @throws ExecutionException
+     * @throws InterruptedException
+     */
     public <C> void awaitComplete(JobObserver<C> jobObserver) throws ExecutionException, InterruptedException {
+        endSubmit(jobObserver);
+        FutureTask<EndJobTag> f = new FutureTask<>(() -> EndJobTag.END_JOB);
+        f.run();
+        jobObserver.addFutureToFirst(f);
         jobObserver.awaitComplete();
     }
 
-    public <C> void endSubmitAndAwaitComplete(JobObserver<C> jobObserver) throws InterruptedException, ExecutionException {
-        endSubmit(jobObserver);
-        awaitComplete(jobObserver);
-    }
 
-    public <C> void submit(Callable<C> callable, JobObserver<C> jobObserver){
-        if(jobObserver.getStatus().getValue() >= JobStatus.CANCEL.getValue()){
+    /**
+     * 根据 jobObserver 提交一个 Callable 任务
+     * @param callable callable
+     * @param jobObserver jobObserver
+     * @param <C> <C>
+     */
+    public <C> void submitWithJobObserver(Callable<C> callable, JobObserver<C> jobObserver){
+        if(jobObserver.getStatus().getValue() >= CANCEL.getValue()){
             throw new RuntimeException("this status can not submit task！");
         }
         Future<C> future = jobExecutor.submit(() -> {
             jobObserver.decrAwaitingCount();
             jobObserver.incrRunningCount();
             C c = callable.call();
+            // 执行回调函数
+            if(null != jobObserver.getJobCallback()){
+                jobObserver.getJobCallback().callback(c);
+            }
             jobObserver.decrRunningCount();
             jobObserver.incrCompleteCount();
-            return c;
+            return null;
         });
+        jobObserver.incrSubmitCount();
         jobObserver.incrAwaitingCount();
         jobObserver.addFuture(future);
     }
 
-    public void submit(Runnable runnable, JobObserver<Void> jobObserver){
-        submit(() -> {
+    /**
+     * 根据 jobObserver 提交一个 runnable 任务
+     * @param runnable runnable
+     * @param jobObserver jobObserver
+     */
+    public void submitWithJobObserver(Runnable runnable, JobObserver<?> jobObserver){
+        submitWithJobObserver(() -> {
             runnable.run();
             return null;
         }, jobObserver);
     }
 
-    public JobObserver<Void> beginJob(){
-        return beginJobWithCallback( new EmptyJobCallable());
+    public <V> Future<V> submit(Callable<V> callable){
+        return jobExecutor.submit(callable);
     }
 
-    @SuppressWarnings("unchecked")
+    public Future<?> submit(Runnable runnable){
+        return jobExecutor.submit(runnable);
+    }
+
+    public void execute(Runnable runnable){
+        jobExecutor.execute(runnable);
+    }
+
+    /**
+     * 开始一个 job
+     * @return JobObserver<?>
+     */
+    public JobObserver<?> beginJob(){
+        return beginJobWithCallback(null);
+    }
+
+    /**
+     * 开始一个 job 并且指定 job 的名称
+     * @param jobName jobName
+     * @return JobObserver<?>
+     */
+    public JobObserver<?> beginJob(String jobName){
+        return beginJobWithCallback(null, jobName);
+    }
+
+    /**
+     * 开始一个 job 并且指定 一个回调函数， 回调函数将在每一个任务执行完成后被调用
+     * @param callback callback
+     * @param <T> <T>
+     * @return JobObserver<T>
+     */
     public <T> JobObserver<T> beginJobWithCallback(JobCallback<T> callback){
-        JobObserver<T> observer = new JobObserver<>();
+        return beginJobWithCallback(callback, generateJobName());
+    }
+
+    /**
+     * 开始一个 job 并且指定 一个回调函数和 job 名称， 回调函数将在每一个任务执行完成后被调用
+     * @param callback callback
+     * @param jobName jobName
+     * @param <T> <T>
+     * @return JobObserver<T>
+     */
+    public <T> JobObserver<T> beginJobWithCallback(JobCallback<T> callback, String jobName){
+        JobObserver<T> observer = new JobObserver<>(jobName);
         observer.setJobCallback(callback);
-        Future<Void> observerFuture = observerExecutor.submit(() -> {
-            while (true) {
+        Future<?> observerFuture = observerExecutor.submit(() -> {
+            while (needStop(observer)) {
                 try {
                     Future<?> future = observer.takeFuture();
                     Object target = future.get();
                     if (target instanceof EndJobTag) {
-                        EndJobTag tag = (EndJobTag) target;
-                        switch (tag) {
-                            case END_JOB:
-                                observer.setStatus(JobStatus.COMPLETE);
-                                break;
-                            case CANCEL:
-                                observer.setStatus(JobStatus.CANCEL);
-                                break;
-                        }
-                        break;
+                        if(observer.getCompleteCount().equals(observer.getSubmitCount())) break;
                     }
-                    if (null != observer.getJobCallback()) {
-                        try {
-                            observer.getJobCallback().callback((T) target);
-                        } catch (Exception e) {
-                            observer.setStatus(JobStatus.CALLBACK_ERROR);
-                            observer.cancel();
-                            break;
-                        }
-                    }
-                    observer.decrRunningCount();
-                    observer.incrCompleteCount();
                 } catch (Exception e) {
                     observer.setStatus(JobStatus.ERROR);
                     observer.cancel();
                     break;
                 }
             }
-            return null;
+            if(observer.getStatus().getValue() < CANCEL.getValue()){
+                observer.setStatus(JobStatus.COMPLETE);
+            }
         });
+        observer.setStatus(JobStatus.RUNNING);
         observer.setObserverFuture(observerFuture);
         return observer;
     }
 
-    public <T> void cancel(JobObserver<T> jobObserver){
-        jobObserver.addFutureToFirst(new FutureTask<>(() -> EndJobTag.CANCEL));
-        jobObserver.cancel();
+    private boolean needStop(JobObserver<?> jobObserver){
+        return !(jobObserver.getStatus().equals(JobStatus.AWAIT_COMPLETE) &&
+                jobObserver.getSubmitCount().equals(jobObserver.getCompleteCount()) );
+    }
+
+    private String generateJobName(){
+        return String.format("job-%d", number.getAndIncrement());
+    }
+
+    public static JobExecutor create(ExecutorService executorService){
+        return new JobExecutor(executorService);
+    }
+
+    public static JobExecutor create(int corePoolSize, int maximumPoolSize){
+        ExecutorService executorService = new ThreadPoolExecutor(3, 3, 1L,
+                TimeUnit.MINUTES,
+                new LinkedBlockingQueue<>(maximumPoolSize * 3),
+                new BlockingRejectedExecutionHandler());
+        return create(executorService);
     }
 
 }

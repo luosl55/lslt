@@ -4,10 +4,10 @@ public enum JobStatus {
     INIT("INIT", 1),
     RUNNING("RUNNING", 2),
     CANCEL("CANCEL", 3),
-    END_SUBMIT("END_SUBMIT", 4),
+    AWAIT_COMPLETE("AWAIT_COMPLETE", 4),
     ERROR("ERROR", 5),
-    CALLBACK_ERROR("CALLBACK_ERROR", 6),
-    COMPLETE("COMPLETE", 7);
+    COMPLETE("COMPLETE", 6);
+
     private String name;
     private int value;
 
