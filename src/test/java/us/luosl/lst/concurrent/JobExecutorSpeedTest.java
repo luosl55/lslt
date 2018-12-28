@@ -6,10 +6,10 @@ import us.luosl.lslt.concurrent.JobExecutor;
 import us.luosl.lslt.concurrent.JobObserver;
 import us.luosl.lslt.concurrent.JobStatistics;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -57,6 +57,7 @@ public class JobExecutorSpeedTest {
         s = System.currentTimeMillis();
         JobExecutor jobExecutor = JobExecutor.create(6, 6);
         JobObserver<?> observer = jobExecutor.beginJob("速度测试任务");
+        JobStatistics.create(observer).setAllCount((long)dataSet.size()).setInterval(Duration.ofSeconds(2)).startStat();
         for(String str: dataSet){
             jobExecutor.submitWithJobObserver(() -> dataProcess(str) , observer);
         }
@@ -85,13 +86,15 @@ public class JobExecutorSpeedTest {
     @Test
     public void jobStatisticsTest() throws ExecutionException, InterruptedException {
         List<String> datas = generateTestData();
-        JobExecutor jobExecutor = JobExecutor.create(6, 6);
+        JobExecutor jobExecutor = JobExecutor.create(3, 3);
         JobObserver<?> observer = jobExecutor.beginJob();
         JobStatistics.create(observer).setAllCount((long)datas.size()).startStat();
         datas.forEach(s -> jobExecutor.submitWithJobObserver(() -> dataProcess(s), observer));
         jobExecutor.awaitComplete(observer);
+        System.out.println(observer.getCompleteCount());
         assert datas.size() == observer.getCompleteCount();
     }
+
 
     /**
      * 定义一个耗时的处理
@@ -99,16 +102,15 @@ public class JobExecutorSpeedTest {
      * @return
      */
     public Integer dataProcess(String str){
-        String[] arr = str.split(" ");
-        List<Double> ls = Arrays.stream(arr).map(Integer::parseInt)
-                .map(item -> item + 1)
-                .map(item -> item - 1)
-                .map(item -> (double) item / 2)
-                .map(item -> item * 2)
-                .collect(Collectors.toList());
+
         for(int j = 0; j< 500; j++){
-            Collections.shuffle(ls);
-            Collections.sort(ls);
+            String[] arr = str.split(" ");
+            Optional<Double> ls = Arrays.stream(arr).map(Integer::parseInt)
+                    .map(item -> item + 1)
+                    .map(item -> item - 1)
+                    .map(item -> (double) item / 2)
+                    .map(item -> item * 2)
+                    .reduce((a, b) -> a + b);
         }
         return 1;
     }
@@ -119,7 +121,7 @@ public class JobExecutorSpeedTest {
      */
     private List<String> generateTestData(){
         List<String> strs = new LinkedList<>();
-        for(int i=0; i< 100000; i++){
+        for(int i=0; i< 200000; i++){
             StringBuilder sb = new StringBuilder();
             for(int j =0; j< 10; j++){
                 sb.append(String.format(" %d", new Random().nextInt(10)));

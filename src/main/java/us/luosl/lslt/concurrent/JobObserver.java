@@ -15,8 +15,9 @@ public class JobObserver<T> {
     private AtomicLong runningCount = new AtomicLong();
     private AtomicLong awaitingCount = new AtomicLong();
     private AtomicLong submitCount = new AtomicLong();
+    private long startTime;
     private AtomicReference<JobStatus> status = new AtomicReference<>(JobStatus.INIT);
-    private BlockingDeque<Future<T>> futureQueue = new LinkedBlockingDeque<>();
+    private BlockingQueue<Future<?>> futureQueue = new LinkedBlockingQueue<>();
     private JobCallback<T> jobCallback;
     private Future<?> observerFuture;
 
@@ -68,6 +69,14 @@ public class JobObserver<T> {
         return jobName;
     }
 
+    public long getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(long startTime) {
+        this.startTime = startTime;
+    }
+
     protected void setObserverFuture(Future<?> observerFuture){
         this.observerFuture = observerFuture;
     }
@@ -76,16 +85,11 @@ public class JobObserver<T> {
         observerFuture.get();
     }
 
-    protected void addFuture(Future<T> future){
+    protected void addFuture(Future<?> future){
         this.futureQueue.add(future);
     }
 
-    @SuppressWarnings("unchecked")
-    protected void addFutureToFirst(Future<?> future){
-        ((BlockingDeque)this.futureQueue).addFirst(future);
-    }
-
-    protected Future<T> takeFuture() throws InterruptedException {
+    protected Future<?> takeFuture() throws InterruptedException {
         return futureQueue.take();
     }
 
@@ -111,7 +115,7 @@ public class JobObserver<T> {
 
     protected void cancel(){
         while(true){
-            Future<T> future = futureQueue.poll();
+            Future<?> future = futureQueue.poll();
             if(null == future) break;
             future.cancel(true);
         }

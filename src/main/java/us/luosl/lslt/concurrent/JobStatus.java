@@ -3,8 +3,8 @@ package us.luosl.lslt.concurrent;
 public enum JobStatus {
     INIT("INIT", 1),
     RUNNING("RUNNING", 2),
-    CANCEL("CANCEL", 3),
-    AWAIT_COMPLETE("AWAIT_COMPLETE", 4),
+    AWAIT_COMPLETE("AWAIT_COMPLETE", 3),
+    CANCEL("CANCEL_JOB", 4),
     ERROR("ERROR", 5),
     COMPLETE("COMPLETE", 6);
 

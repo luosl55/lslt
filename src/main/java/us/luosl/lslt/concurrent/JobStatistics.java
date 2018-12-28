@@ -1,6 +1,8 @@
 package us.luosl.lslt.concurrent;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -51,7 +53,7 @@ public class JobStatistics {
         init();
         Thread statThread = new Thread(() -> {
             try{
-                int threshold = JobStatus.ERROR.getValue();
+                int threshold = JobStatus.CANCEL.getValue();
                 while(jobObserver.getStatus().getValue() < threshold){
                     TimeUnit.NANOSECONDS.sleep(interval.toNanos());
                     invokePrint(jobObserver);
@@ -74,7 +76,7 @@ public class JobStatistics {
         long RunningCount = jobObserver.getRunningCount();
         statInfoFormat.print(
                 statInfoFormat.mkStatInfo(interval, allCount,
-                        completeCount, intervalCompleteCount, RunningCount, awaitingCount)
+                        completeCount, intervalCompleteCount, RunningCount, awaitingCount, jobObserver.getStartTime())
         );
 
     }
@@ -85,21 +87,42 @@ public class JobStatistics {
 
 
     public interface StatInfoFormat{
-        String mkStatInfo(Duration interval, Long allCount, Long completeCount, Long intervalCompleteCount, Long RunningCount, Long awaitingCount);
+        String mkStatInfo(Duration interval, Long allCount, Long completeCount,
+                          Long intervalCompleteCount, Long RunningCount, Long awaitingCount, Long jobStartTime);
         void print(String statInfo);
     }
 
     public class StandardOutputStatInfoFormat implements StatInfoFormat{
+
         @Override
-        public String mkStatInfo(Duration interval, Long allCount, Long completeCount, Long intervalCompleteCount, Long RunningCount, Long awaitingCount) {
+        public String mkStatInfo(Duration interval, Long allCount, Long completeCount,
+                                 Long intervalCompleteCount, Long RunningCount, Long awaitingCount, Long jobStartTime) {
             double speed = (double)intervalCompleteCount / interval.getSeconds();
-            String base = String.format("执行速度:%.2f/秒, 已完成数:%d, 正在运行数:%d, 等待运行数:%d",
-                    speed, completeCount, RunningCount, awaitingCount);
+            long costTime = System.currentTimeMillis() - jobStartTime;
+            String base = String.format("执行速度:%.2f/秒, 已完成数:%d, 正在运行数:%d, 等待运行数:%d, 已经运行:%s",
+                    speed, completeCount, RunningCount, awaitingCount,
+                    costTimeFormat(costTime));
             if(null != allCount){
                 double rate = (double)completeCount / allCount * 100;
-                base = String.format("当前进度:%.2f%% ,%s", rate, base);
+                long estimatedTime = (long) ((allCount - completeCount) / speed * 1000);
+                base = String.format("当前进度:%.2f%%, 预计还需要花费:%s ,%s",
+                        rate, costTimeFormat(estimatedTime), base);
             }
             return String.format("正在执行[%s] %s", jobObserver.getJobName(), base);
+        }
+
+        private String costTimeFormat(long costTime){
+            double s = costTime / 1000D;
+            if(s > 60D){
+                double m = s / 60;
+                if(m > 60){
+                    return String.format("%.2f/小时", m / 60);
+                }else{
+                    return String.format("%.2f/分", m);
+                }
+            }else{
+                return String.format("%.2f/秒", s);
+            }
         }
 
         @Override

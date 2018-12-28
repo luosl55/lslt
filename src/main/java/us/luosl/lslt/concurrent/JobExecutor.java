@@ -3,8 +3,7 @@ package us.luosl.lslt.concurrent;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static us.luosl.lslt.concurrent.JobStatus.AWAIT_COMPLETE;
-import static us.luosl.lslt.concurrent.JobStatus.CANCEL;
+import static us.luosl.lslt.concurrent.JobStatus.*;
 
 /**
  * 基于 job 的线程池
@@ -45,7 +44,7 @@ public class JobExecutor {
         endSubmit(jobObserver);
         FutureTask<EndJobTag> f = new FutureTask<>(() -> EndJobTag.END_JOB);
         f.run();
-        jobObserver.addFutureToFirst(f);
+        jobObserver.addFuture(f);
         jobObserver.awaitComplete();
     }
 
@@ -139,29 +138,26 @@ public class JobExecutor {
         JobObserver<T> observer = new JobObserver<>(jobName);
         observer.setJobCallback(callback);
         Future<?> observerFuture = observerExecutor.submit(() -> {
-            while (needStop(observer)) {
-                try {
+            try{
+                while (needContinue(observer)) {
                     Future<?> future = observer.takeFuture();
-                    Object target = future.get();
-                    if (target instanceof EndJobTag) {
-                        if(observer.getCompleteCount().equals(observer.getSubmitCount())) break;
-                    }
-                } catch (Exception e) {
-                    observer.setStatus(JobStatus.ERROR);
-                    observer.cancel();
-                    break;
+                    future.get();
                 }
-            }
-            if(observer.getStatus().getValue() < CANCEL.getValue()){
-                observer.setStatus(JobStatus.COMPLETE);
+                if(observer.getStatus().equals(AWAIT_COMPLETE)){
+                    observer.setStatus(JobStatus.COMPLETE);
+                }
+            }catch (Exception e){
+                observer.setStatus(ERROR);
+                observer.cancel();
             }
         });
         observer.setStatus(JobStatus.RUNNING);
+        observer.setStartTime(System.currentTimeMillis());
         observer.setObserverFuture(observerFuture);
         return observer;
     }
 
-    private boolean needStop(JobObserver<?> jobObserver){
+    private boolean needContinue(JobObserver<?> jobObserver){
         return !(jobObserver.getStatus().equals(JobStatus.AWAIT_COMPLETE) &&
                 jobObserver.getSubmitCount().equals(jobObserver.getCompleteCount()) );
     }
@@ -175,9 +171,9 @@ public class JobExecutor {
     }
 
     public static JobExecutor create(int corePoolSize, int maximumPoolSize){
-        ExecutorService executorService = new ThreadPoolExecutor(3, 3, 1L,
+        ExecutorService executorService = new ThreadPoolExecutor(corePoolSize, maximumPoolSize, 1L,
                 TimeUnit.MINUTES,
-                new LinkedBlockingQueue<>(maximumPoolSize * 3),
+                new LinkedBlockingQueue<>(maximumPoolSize * 10),
                 new BlockingRejectedExecutionHandler());
         return create(executorService);
     }
