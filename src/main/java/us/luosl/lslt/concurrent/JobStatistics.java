@@ -51,20 +51,21 @@ public class JobStatistics {
         assert !isRunning.get() && null != jobObserver;
         isRunning.set(true);
         init();
+        String threadName = String.format("[%s]统计线程", jobObserver.getJobName());
         Thread statThread = new Thread(() -> {
             try{
-                int threshold = JobStatus.CANCEL.getValue();
+                int threshold = JobStatus.COMPLETE.getValue();
                 while(jobObserver.getStatus().getValue() < threshold){
                     TimeUnit.NANOSECONDS.sleep(interval.toNanos());
                     invokePrint(jobObserver);
                 }
                 invokePrint(jobObserver);
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                statInfoFormat.print(String.format("%s异常终止!", threadName));
             }
         });
         statThread.setDaemon(true);
-        statThread.setName("job statistics thread");
+        statThread.setName(threadName);
         statThread.start();
     }
 
@@ -72,13 +73,9 @@ public class JobStatistics {
         long completeCount = jobObserver.getCompleteCount();
         long intervalCompleteCount = completeCount - beforeCompleteCount.get();
         beforeCompleteCount.set(completeCount);
-        long awaitingCount = jobObserver.getAwaitingCount();
-        long RunningCount = jobObserver.getRunningCount();
         statInfoFormat.print(
-                statInfoFormat.mkStatInfo(interval, allCount,
-                        completeCount, intervalCompleteCount, RunningCount, awaitingCount, jobObserver.getStartTime())
+                statInfoFormat.mkStatInfo(interval, allCount, intervalCompleteCount, jobObserver)
         );
-
     }
 
     public static JobStatistics create(JobObserver<?> jobObserver){
@@ -87,24 +84,22 @@ public class JobStatistics {
 
 
     public interface StatInfoFormat{
-        String mkStatInfo(Duration interval, Long allCount, Long completeCount,
-                          Long intervalCompleteCount, Long RunningCount, Long awaitingCount, Long jobStartTime);
+        String mkStatInfo(Duration interval, Long allCount, long intervalCompleteCount, JobObserver<?> jobObserver);
         void print(String statInfo);
     }
 
     public class StandardOutputStatInfoFormat implements StatInfoFormat{
 
         @Override
-        public String mkStatInfo(Duration interval, Long allCount, Long completeCount,
-                                 Long intervalCompleteCount, Long RunningCount, Long awaitingCount, Long jobStartTime) {
+        public String mkStatInfo(Duration interval, Long allCount, long intervalCompleteCount, JobObserver<?> jobObserver) {
             double speed = (double)intervalCompleteCount / interval.getSeconds();
-            long costTime = System.currentTimeMillis() - jobStartTime;
-            String base = String.format("执行速度:%.2f/秒, 已完成数:%d, 正在运行数:%d, 等待运行数:%d, 已经运行:%s",
-                    speed, completeCount, RunningCount, awaitingCount,
-                    costTimeFormat(costTime));
+            long costTime = System.currentTimeMillis() - jobObserver.getStartTime();
+            String base = String.format("执行速度:%.2f/秒, 已完成数:%d, 错误数:%d, 正在运行数:%d, 等待运行数:%d, 已经运行:%s",
+                    speed, jobObserver.getCompleteCount(), jobObserver.getErrorCount(),
+                    jobObserver.getRunningCount(), jobObserver.getAwaitingCount(), costTimeFormat(costTime));
             if(null != allCount){
-                double rate = (double)completeCount / allCount * 100;
-                long estimatedTime = (long) ((allCount - completeCount) / speed * 1000);
+                double rate = (double)jobObserver.getCompleteCount() / allCount * 100;
+                long estimatedTime = (long) ((allCount - jobObserver.getCompleteCount() ) / speed * 1000);
                 base = String.format("当前进度:%.2f%%, 预计还需要花费:%s ,%s",
                         rate, costTimeFormat(estimatedTime), base);
             }

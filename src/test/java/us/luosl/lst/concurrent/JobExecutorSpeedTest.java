@@ -10,11 +10,28 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 public class JobExecutorSpeedTest {
 
+    @Test
+    public void futureTest() {
+        JobExecutor jobExecutor = JobExecutor.create(4, 4);
+        JobObserver<?> observer = jobExecutor.beginJob("error test");
+        int taskSize = 100;
+        for(int i =0; i<taskSize; i++){
+            int finalI = i;
+            jobExecutor.submitWithJobObserver(() -> {
+                if(finalI == 50) throw new RuntimeException("ggggg");
+                System.out.println(finalI);
+            }, observer);
+        }
+        // 忽略异常
+        jobExecutor.awaitComplete(observer, e -> {});
+        assert taskSize - 1 == observer.getCompleteCount();
+    }
     /**
      * 回调测试
      * @throws ExecutionException

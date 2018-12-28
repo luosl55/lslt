@@ -1,5 +1,6 @@
 package us.luosl.lslt.concurrent;
 
+import java.util.LinkedList;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -12,41 +13,49 @@ public class JobObserver<T> {
 
     private String jobName;
     private AtomicLong completeCount = new AtomicLong();
+    private AtomicLong errorCount = new AtomicLong();
     private AtomicLong runningCount = new AtomicLong();
     private AtomicLong awaitingCount = new AtomicLong();
     private AtomicLong submitCount = new AtomicLong();
     private long startTime;
     private AtomicReference<JobStatus> status = new AtomicReference<>(JobStatus.INIT);
-    private BlockingQueue<Future<?>> futureQueue = new LinkedBlockingQueue<>();
+    private LinkedList<Future<T>> futures = new LinkedList<>();
     private JobCallback<T> jobCallback;
-    private Future<?> observerFuture;
 
     protected JobObserver(String jobName) {
         this.jobName = jobName;
     }
 
-    public void incrRunningCount(){
+    protected void incrRunningCount(){
         runningCount.incrementAndGet();
     }
 
-    public void decrRunningCount(){
+    protected void decrRunningCount(){
         runningCount.decrementAndGet();
     }
 
-    public void incrCompleteCount(){
+    protected void incrCompleteCount(){
         completeCount.incrementAndGet();
     }
 
-    public void incrAwaitingCount(){
+    protected void incrAwaitingCount(){
         awaitingCount.incrementAndGet();
     }
 
-    public void decrAwaitingCount(){
+    protected void decrAwaitingCount(){
         awaitingCount.decrementAndGet();
     }
 
-    public void incrSubmitCount(){
+    protected void incrSubmitCount(){
         submitCount.getAndIncrement();
+    }
+
+    protected void incrErrorCount(){
+        errorCount.getAndIncrement();
+    }
+
+    public LinkedList<Future<T>> getFutures() {
+        return futures;
     }
 
     public Long getCompleteCount() {
@@ -65,6 +74,10 @@ public class JobObserver<T> {
         return submitCount.get();
     }
 
+    public Long getErrorCount(){
+        return errorCount.get();
+    }
+
     public String getJobName() {
         return jobName;
     }
@@ -75,22 +88,6 @@ public class JobObserver<T> {
 
     public void setStartTime(long startTime) {
         this.startTime = startTime;
-    }
-
-    protected void setObserverFuture(Future<?> observerFuture){
-        this.observerFuture = observerFuture;
-    }
-
-    protected void awaitComplete() throws ExecutionException, InterruptedException {
-        observerFuture.get();
-    }
-
-    protected void addFuture(Future<?> future){
-        this.futureQueue.add(future);
-    }
-
-    protected Future<?> takeFuture() throws InterruptedException {
-        return futureQueue.take();
     }
 
     protected void setStatus(JobStatus status){
@@ -115,7 +112,7 @@ public class JobObserver<T> {
 
     protected void cancel(){
         while(true){
-            Future<?> future = futureQueue.poll();
+            Future<?> future = futures.poll();
             if(null == future) break;
             future.cancel(true);
         }

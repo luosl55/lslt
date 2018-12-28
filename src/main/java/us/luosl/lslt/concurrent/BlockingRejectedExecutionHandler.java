@@ -14,6 +14,7 @@ public class BlockingRejectedExecutionHandler implements RejectedExecutionHandle
             BlockingQueue<Runnable> queue = executor.getQueue();
             queue.put(r);
         } catch (InterruptedException e) {
+            // todo 是否合理
             rejectedExecution(r, executor);
         }
     }

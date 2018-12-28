@@ -1,7 +1,9 @@
 package us.luosl.lslt.concurrent;
 
+import java.util.LinkedList;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import static us.luosl.lslt.concurrent.JobStatus.*;
 
@@ -10,13 +12,7 @@ import static us.luosl.lslt.concurrent.JobStatus.*;
  */
 public class JobExecutor {
 
-    private enum EndJobTag{
-        END_JOB
-    }
-
     private ExecutorService jobExecutor;
-
-    private ExecutorService observerExecutor = Executors.newCachedThreadPool();
 
     private AtomicLong number = new AtomicLong();
 
@@ -34,18 +30,31 @@ public class JobExecutor {
     }
 
     /**
-     * 终止向一个 Job 继续提交任务,并且阻塞等待所有任务完成
+     * 阻塞等待所有任务完成
      * @param jobObserver jobObserver
      * @param <C> <C>
-     * @throws ExecutionException
-     * @throws InterruptedException
      */
-    public <C> void awaitComplete(JobObserver<C> jobObserver) throws ExecutionException, InterruptedException {
+    public <C> void awaitComplete(JobObserver<C> jobObserver) {
+        awaitComplete(jobObserver, (Throwable e) -> { throw new RuntimeException(e); } );
+    }
+
+    /**
+     * 阻塞等待所有任务完成,并制定一个出现异常时的处理机制
+     * @param jobObserver jobObserver
+     * @param exceptionHandel exceptionHandel
+     * @param <C> <C>
+     */
+    public <C> void awaitComplete(JobObserver<C> jobObserver, Consumer<Throwable> exceptionHandel) {
         endSubmit(jobObserver);
-        FutureTask<EndJobTag> f = new FutureTask<>(() -> EndJobTag.END_JOB);
-        f.run();
-        jobObserver.addFuture(f);
-        jobObserver.awaitComplete();
+        LinkedList<Future<C>> fs = jobObserver.getFutures();
+        for(Future<C> f: fs){
+            try {
+                f.get();
+            } catch (Exception e) {
+                exceptionHandel.accept(e);
+            }
+        }
+
     }
 
 
@@ -56,24 +65,31 @@ public class JobExecutor {
      * @param <C> <C>
      */
     public <C> void submitWithJobObserver(Callable<C> callable, JobObserver<C> jobObserver){
-        if(jobObserver.getStatus().getValue() >= CANCEL.getValue()){
+        if(jobObserver.getStatus().getValue() > RUNNING.getValue()){
+            // todo 定义异常
             throw new RuntimeException("this status can not submit task！");
         }
         Future<C> future = jobExecutor.submit(() -> {
             jobObserver.decrAwaitingCount();
             jobObserver.incrRunningCount();
-            C c = callable.call();
-            // 执行回调函数
-            if(null != jobObserver.getJobCallback()){
-                jobObserver.getJobCallback().callback(c);
+            C c;
+            try {
+                c = callable.call();
+                // 执行回调函数
+                if(null != jobObserver.getJobCallback()){
+                    jobObserver.getJobCallback().callback(c);
+                }
+                jobObserver.incrCompleteCount();
+            }catch (Exception e){
+                jobObserver.incrErrorCount();
+                throw e;
             }
             jobObserver.decrRunningCount();
-            jobObserver.incrCompleteCount();
-            return null;
+            return c;
         });
         jobObserver.incrSubmitCount();
         jobObserver.incrAwaitingCount();
-        jobObserver.addFuture(future);
+        jobObserver.getFutures().add(future);
     }
 
     /**
@@ -137,29 +153,9 @@ public class JobExecutor {
     public <T> JobObserver<T> beginJobWithCallback(JobCallback<T> callback, String jobName){
         JobObserver<T> observer = new JobObserver<>(jobName);
         observer.setJobCallback(callback);
-        Future<?> observerFuture = observerExecutor.submit(() -> {
-            try{
-                while (needContinue(observer)) {
-                    Future<?> future = observer.takeFuture();
-                    future.get();
-                }
-                if(observer.getStatus().equals(AWAIT_COMPLETE)){
-                    observer.setStatus(JobStatus.COMPLETE);
-                }
-            }catch (Exception e){
-                observer.setStatus(ERROR);
-                observer.cancel();
-            }
-        });
         observer.setStatus(JobStatus.RUNNING);
         observer.setStartTime(System.currentTimeMillis());
-        observer.setObserverFuture(observerFuture);
         return observer;
-    }
-
-    private boolean needContinue(JobObserver<?> jobObserver){
-        return !(jobObserver.getStatus().equals(JobStatus.AWAIT_COMPLETE) &&
-                jobObserver.getSubmitCount().equals(jobObserver.getCompleteCount()) );
     }
 
     private String generateJobName(){
